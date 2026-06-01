@@ -1,0 +1,13 @@
+node_modules/
+.next/
+__pycache__/
+*.pyc
+venv/
+.venv/
+recordings/
+out/
+*.wav
+*.opus
+.env
+meetbot.db
+meetbot.db-*
