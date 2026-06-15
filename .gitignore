@@ -78,3 +78,6 @@ target/
 
 frontend/src-tauri/binaries/
 Cargo.lock
+
+# Local runtime data (DB, bot browser profile) — never commit
+/data/

@@ -18,6 +18,10 @@ import { TranscriptProvider } from '@/contexts/TranscriptContext'
 import { ConfigProvider, useConfig } from '@/contexts/ConfigContext'
 import { OnboardingProvider } from '@/contexts/OnboardingContext'
 import { OnboardingFlow } from '@/components/onboarding'
+import { AuthProvider } from '@/contexts/AuthContext'
+import { AuthGate } from '@/components/auth/AuthGate'
+import { MeetingRecordingProvider } from '@/contexts/MeetingRecordingContext'
+import { RecordingIndicator } from '@/components/recording/RecordingIndicator'
 import { loadBetaFeatures } from '@/types/betaFeatures'
 import { DownloadProgressToastProvider } from '@/components/shared/DownloadProgressToast'
 import { UpdateCheckProvider } from '@/components/UpdateCheckProvider'
@@ -233,11 +237,14 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${sourceSans3.variable} font-sans antialiased`}>
+        <AuthProvider>
+        <AuthGate>
         <AnalyticsProvider>
           <RecordingStateProvider>
             <TranscriptProvider>
               <ConfigProvider>
                 <OllamaDownloadProvider>
+                  <MeetingRecordingProvider>
                   <OnboardingProvider>
                     <UpdateCheckProvider>
                       <SidebarProvider>
@@ -246,6 +253,8 @@ export default function RootLayout({
                             <ImportDialogProvider onOpen={handleOpenImportDialog}>
                               {/* Download progress toast provider - listens for background downloads */}
                               <DownloadProgressToastProvider />
+                              {/* Global meeting-recording indicator (calendar Join) */}
+                              <RecordingIndicator />
 
                               {/* Show onboarding or main app */}
                               {showOnboarding ? (
@@ -269,12 +278,15 @@ export default function RootLayout({
                       </SidebarProvider>
                     </UpdateCheckProvider>
                   </OnboardingProvider>
+                  </MeetingRecordingProvider>
 
                 </OllamaDownloadProvider>
               </ConfigProvider>
             </TranscriptProvider>
           </RecordingStateProvider>
         </AnalyticsProvider>
+        </AuthGate>
+        </AuthProvider>
 
         <Toaster position="bottom-center" richColors closeButton />
       </body>

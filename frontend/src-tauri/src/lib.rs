@@ -38,6 +38,9 @@ pub(crate) use perf_trace;
 pub mod analytics;
 pub mod api;
 pub mod audio;
+pub mod auth;
+pub mod calendar;
+pub mod screen_recording;
 pub mod config;
 pub mod console_utils;
 pub mod database;
@@ -630,24 +633,28 @@ pub fn run() {
             api::api_save_custom_openai_config,
             api::api_get_custom_openai_config,
             api::api_test_custom_openai_connection,
-            // Summary commands
-            summary::api_process_transcript,
-            summary::api_get_summary,
-            summary::api_save_meeting_summary,
-            summary::api_cancel_summary,
+            // Summary commands (reference defining module for tauri 2.11 generate_handler!)
+            summary::commands::api_process_transcript,
+            summary::commands::api_get_summary,
+            summary::commands::api_save_meeting_summary,
+            summary::commands::api_cancel_summary,
             // Template commands
-            summary::api_list_templates,
-            summary::api_get_template_details,
-            summary::api_validate_template,
+            summary::template_commands::api_list_templates,
+            summary::template_commands::api_get_template_details,
+            summary::template_commands::api_validate_template,
             // Built-in AI commands
-            summary::summary_engine::builtin_ai_list_models,
-            summary::summary_engine::builtin_ai_get_model_info,
-            summary::summary_engine::builtin_ai_download_model,
-            summary::summary_engine::builtin_ai_cancel_download,
-            summary::summary_engine::builtin_ai_delete_model,
-            summary::summary_engine::builtin_ai_is_model_ready,
-            summary::summary_engine::builtin_ai_get_available_summary_model,
-            summary::summary_engine::builtin_ai_get_recommended_model,
+            // Reference via the defining `commands` module so tauri 2.11's
+            // generate_handler! finds the macro-generated command helper
+            // (the summary_engine re-export only forwards __cmd__*, not the
+            // newer __tauri_command_name_* helper).
+            summary::summary_engine::commands::builtin_ai_list_models,
+            summary::summary_engine::commands::builtin_ai_get_model_info,
+            summary::summary_engine::commands::builtin_ai_download_model,
+            summary::summary_engine::commands::builtin_ai_cancel_download,
+            summary::summary_engine::commands::builtin_ai_delete_model,
+            summary::summary_engine::commands::builtin_ai_is_model_ready,
+            summary::summary_engine::commands::builtin_ai_get_available_summary_model,
+            summary::summary_engine::commands::builtin_ai_get_recommended_model,
             openrouter::get_openrouter_models,
             audio::recording_preferences::get_recording_preferences,
             audio::recording_preferences::set_recording_preferences,
@@ -703,6 +710,19 @@ pub fn run() {
             onboarding::save_onboarding_status_cmd,
             onboarding::reset_onboarding_status_cmd,
             onboarding::complete_onboarding,
+            // Google OAuth login gate (@intelligaia.com)
+            auth::commands::auth_is_configured,
+            auth::commands::auth_get_session,
+            auth::commands::auth_start_login,
+            auth::commands::auth_logout,
+            // Google Calendar — upcoming meetings
+            calendar::commands::calendar_get_upcoming_meetings,
+            // Screen + video recording of meetings
+            screen_recording::commands::screen_record_start,
+            screen_recording::commands::screen_record_stop,
+            screen_recording::commands::screen_record_active,
+            screen_recording::commands::screen_find_window_region,
+            screen_recording::commands::mux_recording,
             // System settings commands
             #[cfg(target_os = "macos")]
             utils::open_system_settings,

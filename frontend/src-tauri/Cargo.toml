@@ -1,10 +1,10 @@
 [package]
-name = "meetily"
+name = "saransh"
 version = "0.3.0"
-description = "A Tauri App for meeting minutes"
-authors = ["Sujith S"]
+description = "Saransh — AI meeting assistant"
+authors = ["Intelligaia"]
 license = "MIT"
-repository = "https://github.com/Zackriya-Solutions/meeting-minutes"
+repository = "https://github.com/intelligaia/saransh"
 edition = "2021"
 rust-version = "1.77"
 
@@ -113,6 +113,11 @@ async-trait = "0.1"  # Trait abstraction for async methods
 
 reqwest = { version = "0.11", features = ["blocking", "multipart", "json", "stream"] }
 
+# Google OAuth login gate (PKCE loopback flow)
+sha2 = "0.10"            # PKCE S256 code challenge
+base64 = "0.22"          # PKCE / url-safe encoding
+open = "5"               # open the system browser for the OAuth consent screen
+
 # crossbeam
 crossbeam = "0.8.4"
 dashmap = "6.1.0"
@@ -181,6 +186,9 @@ whisper-rs = { version = "0.13.2", features = ["raw-api", "metal", "coreml"] }
 [target.'cfg(target_os = "windows")'.dependencies]
 whisper-rs = { version = "0.13.2", features = ["raw-api", "vulkan"] }
 futures-channel = "0.3.31"
+# Windows Graphics Capture (compositor-based per-window capture: occlusion-proof,
+# follows the window, GPU-safe) — used for recording just the Meet window.
+windows-capture = "2.0.0"
 
 # Linux-specific dependencies
 # Default: CPU-only build (no BLAS)
