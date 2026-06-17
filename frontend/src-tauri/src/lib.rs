@@ -41,6 +41,7 @@ pub mod audio;
 pub mod auth;
 pub mod calendar;
 pub mod screen_recording;
+pub mod voice;
 pub mod config;
 pub mod console_utils;
 pub mod database;
@@ -723,6 +724,14 @@ pub fn run() {
             screen_recording::commands::screen_record_active,
             screen_recording::commands::screen_find_window_region,
             screen_recording::commands::mux_recording,
+            // Speaker voiceprint enrollment + identification
+            voice::commands::voice_enroll,
+            voice::commands::voice_identify,
+            voice::commands::voice_status,
+            voice::commands::voice_clear,
+            voice::commands::voice_model_ready,
+            voice::commands::voice_ensure_model,
+            voice::commands::voice_diarize_label,
             // System settings commands
             #[cfg(target_os = "macos")]
             utils::open_system_settings,

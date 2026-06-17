@@ -189,6 +189,8 @@ futures-channel = "0.3.31"
 # Windows Graphics Capture (compositor-based per-window capture: occlusion-proof,
 # follows the window, GPU-safe) — used for recording just the Meet window.
 windows-capture = "2.0.0"
+# Speaker embedding (voiceprint) for diarization / speaker ID
+sherpa-rs = "0.6.8"
 
 # Linux-specific dependencies
 # Default: CPU-only build (no BLAS)

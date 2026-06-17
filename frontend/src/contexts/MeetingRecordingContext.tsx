@@ -196,6 +196,24 @@ export function MeetingRecordingProvider({ children }: { children: ReactNode }) 
             outPath: mergedOut,
           })
           toast.success('Meeting recording saved', { description: mergedOut })
+
+          // If a voiceprint is enrolled, diarize + name speakers in the
+          // background (it's slow on long files — don't block the save flow).
+          void (async () => {
+            try {
+              const enrolled = await invoke('voice_status')
+              if (!enrolled) return
+              const segs = await invoke<Array<{ name: string }>>('voice_diarize_label', {
+                audioPath: mergedOut,
+              })
+              const names = Array.from(new Set(segs.map((s) => s.name)))
+              if (names.length) {
+                toast.success('Speakers identified', { description: names.join(', ') })
+              }
+            } catch {
+              /* non-fatal — recognition is best-effort */
+            }
+          })()
         } catch (e) {
           toast.message('Saved screen video (audio merge skipped)', {
             description: typeof e === 'string' ? e : p.screen,
