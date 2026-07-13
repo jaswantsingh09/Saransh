@@ -732,6 +732,7 @@ pub fn run() {
             voice::commands::voice_model_ready,
             voice::commands::voice_ensure_model,
             voice::commands::voice_diarize_label,
+            voice::commands::voice_load_speakers,
             // System settings commands
             #[cfg(target_os = "macos")]
             utils::open_system_settings,

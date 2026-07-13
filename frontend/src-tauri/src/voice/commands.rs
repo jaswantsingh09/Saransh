@@ -262,7 +262,7 @@ pub async fn voice_ensure_model(app: AppHandle) -> Result<(), String> {
 }
 
 /// A diarized speaker turn, named if it matches an enrolled voiceprint.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LabeledSegment {
     pub start: f32,
     pub end: f32,
@@ -270,6 +270,39 @@ pub struct LabeledSegment {
     pub speaker: i32,
     /// Enrolled person's name, or "Speaker N" if unknown.
     pub name: String,
+}
+
+/// Diarization results are persisted next to the recording as `speakers.json`
+/// so the meeting-review UI can label transcript segments by speaker.
+const SPEAKERS_FILE: &str = "speakers.json";
+
+/// Write labeled segments to `speakers.json` in the same folder as `audio_path`.
+fn save_speakers(audio_path: &str, segments: &[LabeledSegment]) {
+    let Some(dir) = std::path::Path::new(audio_path).parent() else {
+        return;
+    };
+    let path = dir.join(SPEAKERS_FILE);
+    match serde_json::to_vec_pretty(segments) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&path, json) {
+                log::warn!("Failed to persist speakers.json: {}", e);
+            } else {
+                log::info!("Persisted {} labeled segment(s) -> {}", segments.len(), path.display());
+            }
+        }
+        Err(e) => log::warn!("Failed to serialize speakers: {}", e),
+    }
+}
+
+/// Load persisted speaker labels for a meeting folder. Returns an empty vec if
+/// diarization never ran (no `speakers.json`) — callers treat that as "no labels".
+#[tauri::command]
+pub async fn voice_load_speakers(folder_path: String) -> Result<Vec<LabeledSegment>, String> {
+    let path = std::path::Path::new(&folder_path).join(SPEAKERS_FILE);
+    match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string()),
+        Err(_) => Ok(Vec::new()),
+    }
 }
 
 /// Diarize a recording and label each speaker — naming any cluster that matches
@@ -289,6 +322,7 @@ pub async fn voice_diarize_label(
     let prints = load_prints(&app);
 
     tokio::task::spawn_blocking(move || -> Result<Vec<LabeledSegment>, String> {
+        let out_path = audio_path.clone();
         // Decode to 16 kHz mono — what the diarizer expects.
         let decoded = crate::audio::decoder::decode_audio_file(std::path::Path::new(&audio_path))
             .map_err(|e| format!("Failed to decode audio: {}", e))?;
@@ -364,7 +398,7 @@ pub async fn voice_diarize_label(
             }
         }
 
-        let labeled = segments
+        let labeled: Vec<LabeledSegment> = segments
             .into_iter()
             .map(|s| LabeledSegment {
                 start: s.start,
@@ -376,6 +410,8 @@ pub async fn voice_diarize_label(
                     .unwrap_or_else(|| format!("Speaker {}", s.speaker + 1)),
             })
             .collect();
+        // Persist next to the recording so the review UI can label transcripts.
+        save_speakers(&out_path, &labeled);
         Ok(labeled)
     })
     .await

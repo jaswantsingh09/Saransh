@@ -208,7 +208,9 @@ export function MeetingRecordingProvider({ children }: { children: ReactNode }) 
               })
               const names = Array.from(new Set(segs.map((s) => s.name)))
               if (names.length) {
-                toast.success('Speakers identified', { description: names.join(', ') })
+                toast.success('Speakers labeled in transcript', {
+                  description: names.join(', '),
+                })
               }
             } catch {
               /* non-fatal — recognition is best-effort */

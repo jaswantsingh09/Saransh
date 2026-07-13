@@ -4,6 +4,8 @@ import { Transcript, TranscriptSegmentData } from '@/types';
 import { TranscriptView } from '@/components/TranscriptView';
 import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptView';
 import { TranscriptButtonGroup } from './TranscriptButtonGroup';
+import { SpeakerLegend } from './SpeakerLegend';
+import { useSpeakerLabels } from '@/hooks/useSpeakerLabels';
 import { useMemo } from 'react';
 
 interface TranscriptPanelProps {
@@ -49,8 +51,11 @@ export function TranscriptPanel({
   meetingFolderPath,
   onRefetchTranscripts,
 }: TranscriptPanelProps) {
+  // Load diarized speaker labels (speakers.json) for this meeting, if any.
+  const speakerLabels = useSpeakerLabels(meetingFolderPath);
+
   // Convert transcripts to segments if pagination is not used but we want virtualization
-  const convertedSegments = useMemo(() => {
+  const baseSegments = useMemo(() => {
     if (usePagination && segments) {
       return segments;
     }
@@ -64,6 +69,16 @@ export function TranscriptPanel({
     }));
   }, [transcripts, usePagination, segments]);
 
+  // Attach a speaker name to each segment by matching its start time against the
+  // diarized turns. No-op when the meeting has no speaker labels.
+  const convertedSegments = useMemo(() => {
+    if (!speakerLabels.hasSpeakers) return baseSegments;
+    return baseSegments.map(s => ({
+      ...s,
+      speaker: speakerLabels.labelForTime(s.timestamp),
+    }));
+  }, [baseSegments, speakerLabels]);
+
   return (
     <div className="hidden md:flex md:w-1/4 lg:w-1/3 min-w-0 border-r border-gray-200 bg-white flex-col relative shrink-0">
       {/* Title area */}
@@ -76,6 +91,13 @@ export function TranscriptPanel({
           meetingFolderPath={meetingFolderPath}
           onRefetchTranscripts={onRefetchTranscripts}
         />
+        {/* Speaker legend (only when Voice ID identified speakers for this meeting) */}
+        {speakerLabels.hasSpeakers && (
+          <SpeakerLegend
+            names={speakerLabels.names}
+            colorForName={speakerLabels.colorForName}
+          />
+        )}
       </div>
 
       {/* Transcript content - use virtualized view for better performance */}
@@ -89,6 +111,7 @@ export function TranscriptPanel({
           enableStreaming={false}
           showConfidence={true}
           disableAutoScroll={disableAutoScroll}
+          getSpeakerColor={speakerLabels.hasSpeakers ? speakerLabels.colorForName : undefined}
           hasMore={hasMore}
           isLoadingMore={isLoadingMore}
           totalCount={totalCount}
