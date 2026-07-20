@@ -243,6 +243,18 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
     };
   }, []);
 
+  // Auto-stop trigger from the global Google Meet detector (meeting window closed).
+  // Mirrors the 'start-recording-from-sidebar' path so the auto flow reuses the
+  // exact same stop sequence as the Stop button.
+  useEffect(() => {
+    const onMeetEnded = () => {
+      console.log('[RecordingControls] stop-recording-from-meet received');
+      void handleStopRecording();
+    };
+    window.addEventListener('stop-recording-from-meet', onMeetEnded);
+    return () => window.removeEventListener('stop-recording-from-meet', onMeetEnded);
+  }, [handleStopRecording]);
+
   useEffect(() => {
     console.log('Setting up recording event listeners');
     let unsubscribes: (() => void)[] = [];

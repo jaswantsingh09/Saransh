@@ -22,10 +22,18 @@ export interface BetaFeatures {
    * @since v0.3.0
    */
   importAndRetranscribe: boolean;
+
+  /**
+   * Watch for the user being in a Google Meet (window-title detection) and prompt
+   * to auto-start transcription; auto-stop when the meeting window closes.
+   * @since v0.4.0
+   */
+  autoDetectMeet: boolean;
 }
 
 export const DEFAULT_BETA_FEATURES: BetaFeatures = {
   importAndRetranscribe: true, // Default: enabled
+  autoDetectMeet: true, // Default: enabled
 };
 
 
@@ -34,6 +42,7 @@ export const DEFAULT_BETA_FEATURES: BetaFeatures = {
  */
 export const BETA_FEATURE_NAMES: Record<keyof BetaFeatures, string> = {
   importAndRetranscribe: 'Import Audio & Retranscribe',
+  autoDetectMeet: 'Auto-detect Google Meet',
 };
 
 /**
@@ -41,6 +50,7 @@ export const BETA_FEATURE_NAMES: Record<keyof BetaFeatures, string> = {
  */
 export const BETA_FEATURE_DESCRIPTIONS: Record<keyof BetaFeatures, string> = {
   importAndRetranscribe: 'Import audio files to transcribe or retranscribe existing meetings with different language settings.',
+  autoDetectMeet: 'Detect when you join a Google Meet and offer to start transcribing automatically, then stop when the meeting ends. Windows only.',
 };
 
 /**

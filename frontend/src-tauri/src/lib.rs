@@ -45,6 +45,7 @@ pub mod voice;
 pub mod config;
 pub mod console_utils;
 pub mod database;
+pub mod meet_detect;
 pub mod notifications;
 pub mod ollama;
 pub mod onboarding;
@@ -724,6 +725,8 @@ pub fn run() {
             screen_recording::commands::screen_record_active,
             screen_recording::commands::screen_find_window_region,
             screen_recording::commands::mux_recording,
+            // Passive Google Meet detection (auto-transcribe prompt)
+            meet_detect::meet_detect_scan,
             // Speaker voiceprint enrollment + identification
             voice::commands::voice_enroll,
             voice::commands::voice_identify,

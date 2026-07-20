@@ -22,6 +22,7 @@ import { AuthProvider } from '@/contexts/AuthContext'
 import { AuthGate } from '@/components/auth/AuthGate'
 import { MeetingRecordingProvider } from '@/contexts/MeetingRecordingContext'
 import { RecordingIndicator } from '@/components/recording/RecordingIndicator'
+import { MeetAutoDetect } from '@/components/recording/MeetAutoDetect'
 import { loadBetaFeatures } from '@/types/betaFeatures'
 import { DownloadProgressToastProvider } from '@/components/shared/DownloadProgressToast'
 import { UpdateCheckProvider } from '@/components/UpdateCheckProvider'
@@ -255,6 +256,8 @@ export default function RootLayout({
                               <DownloadProgressToastProvider />
                               {/* Global meeting-recording indicator (calendar Join) */}
                               <RecordingIndicator />
+                              {/* Passive Google Meet detection → prompt to auto-transcribe */}
+                              <MeetAutoDetect />
 
                               {/* Show onboarding or main app */}
                               {showOnboarding ? (
