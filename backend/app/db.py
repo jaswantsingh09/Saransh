@@ -6,6 +6,7 @@ from typing import Optional, Dict
 import logging
 from contextlib import asynccontextmanager
 import sqlite3
+import uuid
 try:
     from .schema_validator import SchemaValidator
 except ImportError:
@@ -64,6 +65,21 @@ class DatabaseManager:
                 logger.info("Added folder_path column to meetings table")
             except sqlite3.OperationalError:
                 pass  # Column already exists
+
+            # Migration: ownership + status columns for the shared-backend MVP
+            for col_name, col_def in [
+                ("owner_id", "TEXT"),
+                ("status", "TEXT"),
+                ("source", "TEXT"),
+                ("started_at", "TEXT"),
+                ("duration_s", "INTEGER"),
+                ("audio_uploaded", "INTEGER DEFAULT 0"),
+            ]:
+                try:
+                    cursor.execute(f"ALTER TABLE meetings ADD COLUMN {col_name} {col_def}")
+                    logger.info(f"Added {col_name} column to meetings table")
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
             
             # Create transcripts table
             cursor.execute("""
@@ -153,6 +169,34 @@ class DatabaseManager:
                     elevenLabsApiKey TEXT,
                     groqApiKey TEXT,
                     openaiApiKey TEXT
+                )
+            """)
+
+            # Create users table (internal-org auth via Google sign-in)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id TEXT PRIMARY KEY,
+                    google_sub TEXT UNIQUE,
+                    email TEXT NOT NULL UNIQUE,
+                    name TEXT,
+                    picture TEXT,
+                    is_admin INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    last_login_at TEXT
+                )
+            """)
+
+            # Create share_grants table (who can access a meeting)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS share_grants (
+                    id TEXT PRIMARY KEY,
+                    meeting_id TEXT NOT NULL,
+                    grantee_id TEXT,
+                    all_org INTEGER NOT NULL DEFAULT 0,
+                    role TEXT NOT NULL DEFAULT 'viewer',
+                    created_by TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (meeting_id) REFERENCES meetings(id)
                 )
             """)
 
@@ -909,5 +953,357 @@ class DatabaseManager:
             logger.error(f"Error updating meeting summary: {str(e)}")
             raise
 
-   
+    # ------------------------------------------------------------------
+    # Users (internal-org Google auth)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _row_to_user(row) -> Optional[Dict]:
+        """Map a users row (id, google_sub, email, name, picture, is_admin, created_at, last_login_at) to a dict."""
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "google_sub": row[1],
+            "email": row[2],
+            "name": row[3],
+            "picture": row[4],
+            "is_admin": bool(row[5]),
+            "created_at": row[6],
+            "last_login_at": row[7],
+        }
 
+    async def get_user_by_id(self, user_id: str) -> Optional[Dict]:
+        """Fetch a user by internal id."""
+        async with self._get_connection() as conn:
+            cursor = await conn.execute(
+                "SELECT id, google_sub, email, name, picture, is_admin, created_at, last_login_at "
+                "FROM users WHERE id = ?",
+                (user_id,),
+            )
+            return self._row_to_user(await cursor.fetchone())
+
+    async def upsert_user(self, google_sub: str, email: str, name: str = None,
+                          picture: str = None) -> Dict:
+        """Insert or update a user on sign-in, matched by google_sub or email.
+
+        The very first user to sign in is bootstrapped as an admin so there is
+        always at least one administrator for the org.
+        """
+        if not email or not email.strip():
+            raise ValueError("email cannot be empty")
+
+        now = datetime.utcnow().isoformat()
+        try:
+            async with self._get_connection() as conn:
+                await conn.execute("BEGIN TRANSACTION")
+                try:
+                    cursor = await conn.execute(
+                        "SELECT id FROM users WHERE google_sub = ? OR email = ?",
+                        (google_sub, email),
+                    )
+                    existing = await cursor.fetchone()
+
+                    if existing:
+                        user_id = existing[0]
+                        await conn.execute(
+                            """
+                            UPDATE users
+                            SET google_sub = ?, email = ?, name = ?, picture = ?, last_login_at = ?
+                            WHERE id = ?
+                            """,
+                            (google_sub, email, name, picture, now, user_id),
+                        )
+                    else:
+                        user_id = f"user-{uuid.uuid4().hex}"
+                        count_cursor = await conn.execute("SELECT COUNT(*) FROM users")
+                        is_admin = 1 if (await count_cursor.fetchone())[0] == 0 else 0
+                        await conn.execute(
+                            """
+                            INSERT INTO users
+                                (id, google_sub, email, name, picture, is_admin, created_at, last_login_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (user_id, google_sub, email, name, picture, is_admin, now, now),
+                        )
+                    await conn.commit()
+                    logger.info(f"Upserted user {email} (id={user_id})")
+                except Exception:
+                    await conn.rollback()
+                    raise
+        except Exception as e:
+            logger.error(f"Error upserting user {email}: {str(e)}", exc_info=True)
+            raise
+
+        return await self.get_user_by_id(user_id)
+
+    # ------------------------------------------------------------------
+    # Owned meetings (shared-backend MVP ingest)
+    # ------------------------------------------------------------------
+    async def create_owned_meeting(self, meeting_id: str, title: str, owner_id: str,
+                                   source: str = "desktop", started_at: str = None) -> None:
+        """Create a meeting owned by a user, in the 'processing' state."""
+        if not owner_id:
+            raise ValueError("owner_id is required")
+        async with self._get_connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO meetings
+                    (id, title, created_at, updated_at, owner_id, status, source, started_at, audio_uploaded)
+                VALUES (?, ?, datetime('now','localtime'), datetime('now','localtime'), ?, 'processing', ?, ?, 0)
+                """,
+                (meeting_id, title, owner_id, source, started_at),
+            )
+            await conn.commit()
+            logger.info(f"Created owned meeting {meeting_id} for owner {owner_id}")
+
+    async def add_meeting_segments(self, meeting_id: str, segments: list) -> int:
+        """Bulk-insert transcript segments for a meeting. Each segment is a dict
+        with keys: text, timestamp?, audio_start_time?, audio_end_time?, duration?."""
+        inserted = 0
+        async with self._get_connection() as conn:
+            for s in segments:
+                await conn.execute(
+                    """
+                    INSERT INTO transcripts
+                        (meeting_id, transcript, timestamp, summary, action_items, key_points,
+                         audio_start_time, audio_end_time, duration)
+                    VALUES (?, ?, ?, '', '', '', ?, ?, ?)
+                    """,
+                    (
+                        meeting_id,
+                        s.get("text", ""),
+                        s.get("timestamp") or datetime.utcnow().isoformat(),
+                        s.get("audio_start_time"),
+                        s.get("audio_end_time"),
+                        s.get("duration"),
+                    ),
+                )
+                inserted += 1
+            await conn.commit()
+        logger.info(f"Inserted {inserted} segments for meeting {meeting_id}")
+        return inserted
+
+    async def set_meeting_status(self, meeting_id: str, status: str) -> None:
+        """Update a meeting's processing status (processing|ready|failed)."""
+        now = datetime.utcnow().isoformat()
+        async with self._get_connection() as conn:
+            await conn.execute(
+                "UPDATE meetings SET status = ?, updated_at = ? WHERE id = ?",
+                (status, now, meeting_id),
+            )
+            await conn.commit()
+
+    async def set_meeting_audio(self, meeting_id: str, uploaded: bool = True) -> None:
+        """Mark whether a meeting's audio file has been uploaded."""
+        async with self._get_connection() as conn:
+            await conn.execute(
+                "UPDATE meetings SET audio_uploaded = ? WHERE id = ?",
+                (1 if uploaded else 0, meeting_id),
+            )
+            await conn.commit()
+
+    async def get_meeting_access_info(self, meeting_id: str) -> Optional[Dict]:
+        """Return ownership/status info for authorization, or None if not found."""
+        async with self._get_connection() as conn:
+            cursor = await conn.execute(
+                "SELECT id, owner_id, status, audio_uploaded FROM meetings WHERE id = ?",
+                (meeting_id,),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "id": row[0],
+                "owner_id": row[1],
+                "status": row[2],
+                "audio_uploaded": bool(row[3]),
+            }
+
+    # ------------------------------------------------------------------
+    # Sharing (share_grants) + access resolution
+    # ------------------------------------------------------------------
+    async def get_user_by_email(self, email: str) -> Optional[Dict]:
+        """Fetch a user by email (used to resolve a share target)."""
+        async with self._get_connection() as conn:
+            cursor = await conn.execute(
+                "SELECT id, google_sub, email, name, picture, is_admin, created_at, last_login_at "
+                "FROM users WHERE email = ?",
+                (email,),
+            )
+            return self._row_to_user(await cursor.fetchone())
+
+    async def get_share_grant(self, grant_id: str) -> Optional[Dict]:
+        async with self._get_connection() as conn:
+            cursor = await conn.execute(
+                "SELECT id, meeting_id, grantee_id, all_org, role, created_by, created_at "
+                "FROM share_grants WHERE id = ?",
+                (grant_id,),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "id": row[0], "meeting_id": row[1], "grantee_id": row[2],
+                "all_org": bool(row[3]), "role": row[4],
+                "created_by": row[5], "created_at": row[6],
+            }
+
+    async def upsert_share_grant(self, meeting_id: str, grantee_id: str = None,
+                                 all_org: bool = False, role: str = "viewer",
+                                 created_by: str = None) -> Dict:
+        """Create or update a share grant. One row per (meeting, grantee), and a
+        single all_org row per meeting; re-granting just updates the role."""
+        if role not in ("viewer", "editor"):
+            raise ValueError("role must be 'viewer' or 'editor'")
+        if not all_org and not grantee_id:
+            raise ValueError("grantee_id is required unless all_org is set")
+
+        now = datetime.utcnow().isoformat()
+        async with self._get_connection() as conn:
+            await conn.execute("BEGIN TRANSACTION")
+            try:
+                if all_org:
+                    cursor = await conn.execute(
+                        "SELECT id FROM share_grants WHERE meeting_id = ? AND all_org = 1",
+                        (meeting_id,),
+                    )
+                else:
+                    cursor = await conn.execute(
+                        "SELECT id FROM share_grants WHERE meeting_id = ? AND grantee_id = ? AND all_org = 0",
+                        (meeting_id, grantee_id),
+                    )
+                existing = await cursor.fetchone()
+
+                if existing:
+                    grant_id = existing[0]
+                    await conn.execute(
+                        "UPDATE share_grants SET role = ? WHERE id = ?",
+                        (role, grant_id),
+                    )
+                else:
+                    grant_id = f"grant-{uuid.uuid4().hex}"
+                    await conn.execute(
+                        """
+                        INSERT INTO share_grants
+                            (id, meeting_id, grantee_id, all_org, role, created_by, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (grant_id, meeting_id, None if all_org else grantee_id,
+                         1 if all_org else 0, role, created_by, now),
+                    )
+                await conn.commit()
+            except Exception:
+                await conn.rollback()
+                raise
+        return await self.get_share_grant(grant_id)
+
+    async def list_share_grants(self, meeting_id: str) -> list:
+        """List all grants for a meeting, resolving grantee email/name."""
+        async with self._get_connection() as conn:
+            cursor = await conn.execute(
+                """
+                SELECT sg.id, sg.grantee_id, sg.all_org, sg.role, sg.created_at,
+                       u.email, u.name
+                FROM share_grants sg
+                LEFT JOIN users u ON sg.grantee_id = u.id
+                WHERE sg.meeting_id = ?
+                ORDER BY sg.created_at
+                """,
+                (meeting_id,),
+            )
+            rows = await cursor.fetchall()
+            return [
+                {
+                    "id": r[0],
+                    "grantee_id": r[1],
+                    "all_org": bool(r[2]),
+                    "role": r[3],
+                    "created_at": r[4],
+                    "grantee_email": r[5],
+                    "grantee_name": r[6],
+                }
+                for r in rows
+            ]
+
+    async def revoke_share_grant(self, meeting_id: str, grant_id: str) -> bool:
+        """Delete a grant scoped to its meeting. Returns True if a row was removed."""
+        async with self._get_connection() as conn:
+            cursor = await conn.execute(
+                "DELETE FROM share_grants WHERE id = ? AND meeting_id = ?",
+                (grant_id, meeting_id),
+            )
+            await conn.commit()
+            return cursor.rowcount > 0
+
+    async def get_share_role(self, meeting_id: str, user_id: str) -> Optional[str]:
+        """Return the effective shared role for a user on a meeting via grants
+        (explicit grant and/or all_org), or None. Editor outranks viewer.
+        Does NOT consider ownership/admin — the caller handles those."""
+        async with self._get_connection() as conn:
+            cursor = await conn.execute(
+                "SELECT role FROM share_grants WHERE meeting_id = ? AND grantee_id = ? AND all_org = 0",
+                (meeting_id, user_id),
+            )
+            explicit = await cursor.fetchone()
+            cursor = await conn.execute(
+                "SELECT role FROM share_grants WHERE meeting_id = ? AND all_org = 1",
+                (meeting_id,),
+            )
+            org = await cursor.fetchone()
+
+        roles = {r[0] for r in (explicit, org) if r}
+        if "editor" in roles:
+            return "editor"
+        if "viewer" in roles:
+            return "viewer"
+        return None
+
+    async def get_meeting_summary(self, meeting_id: str) -> Optional[Dict]:
+        """Read the raw summary process row for a meeting (status/result/error),
+        independent of transcript_chunks. Returns None if no process exists."""
+        async with self._get_connection() as conn:
+            cursor = await conn.execute(
+                "SELECT status, result, error, updated_at FROM summary_processes WHERE meeting_id = ?",
+                (meeting_id,),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            return {"status": row[0], "result": row[1], "error": row[2], "updated_at": row[3]}
+
+    async def list_accessible_meetings(self, user_id: str, is_admin: bool = False) -> list:
+        """Meetings a user can see: owned, explicitly shared, or shared all-org
+        (admins see everything). Ordered newest first. Used by the Library."""
+        async with self._get_connection() as conn:
+            if is_admin:
+                cursor = await conn.execute(
+                    """
+                    SELECT id, title, created_at, owner_id, status, audio_uploaded
+                    FROM meetings ORDER BY created_at DESC
+                    """
+                )
+            else:
+                cursor = await conn.execute(
+                    """
+                    SELECT DISTINCT m.id, m.title, m.created_at, m.owner_id, m.status, m.audio_uploaded
+                    FROM meetings m
+                    LEFT JOIN share_grants sg ON sg.meeting_id = m.id
+                    WHERE m.owner_id = ?
+                       OR (sg.grantee_id = ? AND sg.all_org = 0)
+                       OR sg.all_org = 1
+                    ORDER BY m.created_at DESC
+                    """,
+                    (user_id, user_id),
+                )
+            rows = await cursor.fetchall()
+            return [
+                {
+                    "id": r[0],
+                    "title": r[1],
+                    "created_at": r[2],
+                    "owner_id": r[3],
+                    "status": r[4],
+                    "audio_uploaded": bool(r[5]),
+                }
+                for r in rows
+            ]

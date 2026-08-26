@@ -35,7 +35,32 @@ class SchemaValidator:
                 ('id', 'TEXT', 'PRIMARY KEY'),
                 ('title', 'TEXT', 'NOT NULL'),
                 ('created_at', 'TEXT', 'NOT NULL'),
-                ('updated_at', 'TEXT', 'NOT NULL')
+                ('updated_at', 'TEXT', 'NOT NULL'),
+                ('owner_id', 'TEXT', ''),
+                ('status', 'TEXT', ''),
+                ('source', 'TEXT', ''),
+                ('started_at', 'TEXT', ''),
+                ('duration_s', 'INTEGER', ''),
+                ('audio_uploaded', 'INTEGER', 'DEFAULT 0')
+            ],
+            'users': [
+                ('id', 'TEXT', 'PRIMARY KEY'),
+                ('google_sub', 'TEXT', ''),
+                ('email', 'TEXT', 'NOT NULL'),
+                ('name', 'TEXT', ''),
+                ('picture', 'TEXT', ''),
+                ('is_admin', 'INTEGER', 'DEFAULT 0'),
+                ('created_at', 'TEXT', 'NOT NULL'),
+                ('last_login_at', 'TEXT', '')
+            ],
+            'share_grants': [
+                ('id', 'TEXT', 'PRIMARY KEY'),
+                ('meeting_id', 'TEXT', 'NOT NULL'),
+                ('grantee_id', 'TEXT', ''),
+                ('all_org', 'INTEGER', 'DEFAULT 0'),
+                ('role', 'TEXT', 'NOT NULL'),
+                ('created_by', 'TEXT', ''),
+                ('created_at', 'TEXT', 'NOT NULL')
             ],
             'transcripts': [
                 ('id', 'TEXT', 'PRIMARY KEY'),
