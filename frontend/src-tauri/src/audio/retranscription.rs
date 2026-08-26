@@ -4,7 +4,9 @@ use crate::audio::decoder::decode_audio_file;
 use crate::audio::vad::get_speech_chunks_with_progress;
 use super::common::{create_transcript_segments, split_segment_at_silence, write_transcripts_json};
 use super::constants::AUDIO_EXTENSIONS;
+use crate::audio::transcription::yantra_stt;
 use crate::config::{DEFAULT_WHISPER_MODEL, DEFAULT_PARAKEET_MODEL};
+use crate::database::repositories::setting::SettingsRepository;
 use crate::parakeet_engine::ParakeetEngine;
 use crate::state::AppState;
 use crate::whisper_engine::WhisperEngine;
@@ -188,6 +190,33 @@ async fn run_retranscription<R: Runtime>(
         meeting_id, language, model, provider
     );
 
+    // Yantra: hosted STT via the same API key as the Yantra summary provider
+    // (settings.yantraApiKey). It runs through the normal decode+VAD path below and
+    // POSTs each *bounded speech segment* to the server — whole-file uploads make
+    // the hosted Whisper model loop on long/continuous audio — so no local engine
+    // is loaded.
+    let use_yantra = provider.as_deref() == Some("yantra");
+    let (yantra_key, yantra_model) = if use_yantra {
+        let app_state = app
+            .try_state::<AppState>()
+            .ok_or_else(|| anyhow!("App state not available"))?;
+        let key = SettingsRepository::get_api_key(app_state.db_manager.pool(), "yantra")
+            .await
+            .map_err(|e| anyhow!("Failed to read Yantra API key: {}", e))?
+            .filter(|k| !k.trim().is_empty())
+            .ok_or_else(|| anyhow!(
+                "Yantra API key not set. Add it in Settings under the AI/Summary provider (Yantra) — the same key is used for transcription."
+            ))?;
+        let m = model
+            .clone()
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or_else(|| yantra_stt::DEFAULT_YANTRA_STT_MODEL.to_string());
+        info!("Retranscribing via Yantra (model={}, lang={:?}) — per-segment", m, language);
+        (Some(key), m)
+    } else {
+        (None, String::new())
+    };
+
     // Emit progress: decoding
     emit_progress(&app, &meeting_id, "decoding", 5, "Decoding audio file...");
 
@@ -299,7 +328,7 @@ async fn run_retranscription<R: Runtime>(
     emit_progress(&app, &meeting_id, "transcribing", 25, "Loading transcription engine...");
 
     // Initialize the appropriate engine once (not per-segment)
-    let whisper_engine = if !use_parakeet {
+    let whisper_engine = if !use_parakeet && !use_yantra {
         Some(get_or_init_whisper(&app, model.as_deref()).await?)
     } else {
         None
@@ -368,7 +397,19 @@ async fn run_retranscription<R: Runtime>(
         }
 
         // Transcribe this segment
-        let (text, conf) = if use_parakeet {
+        let (text, conf) = if use_yantra {
+            let key = yantra_key.as_deref().unwrap();
+            // Be resilient: the server 500s on the occasional degenerate/near-silent
+            // chunk ("max() iterable argument is empty"). Skip that segment rather
+            // than aborting the whole transcription.
+            match yantra_stt::transcribe_samples(&segment.samples, key, &yantra_model, language.as_deref()).await {
+                Ok(t) => (t, 0.85f32),
+                Err(e) => {
+                    warn!("Yantra segment {} failed ({}); skipping", i, e);
+                    (String::new(), 0.0f32)
+                }
+            }
+        } else if use_parakeet {
             let engine = parakeet_engine.as_ref().unwrap();
             let text = engine
                 .transcribe_audio(segment.samples.clone())
@@ -416,17 +457,41 @@ async fn run_retranscription<R: Runtime>(
         return Err(anyhow!("Retranscription cancelled"));
     }
 
-    emit_progress(&app, &meeting_id, "saving", 80, "Saving transcripts...");
+    save_and_finalize(
+        &app,
+        &meeting_id,
+        &folder_path,
+        &audio_path,
+        &all_transcripts,
+        duration_seconds,
+        language,
+    )
+    .await
+}
 
-    // Create transcript segments with proper timestamps from VAD
-    let segments = create_transcript_segments(&all_transcripts);
+/// Persist transcript segments (DB transaction + transcripts.json + metadata) and
+/// build the result. Shared by the local (whisper/parakeet) and hosted (Yantra)
+/// transcription paths. `all_transcripts` is `(text, start_ms, end_ms)`.
+async fn save_and_finalize<R: Runtime>(
+    app: &AppHandle<R>,
+    meeting_id: &str,
+    folder_path: &Path,
+    audio_path: &Path,
+    all_transcripts: &[(String, f64, f64)],
+    duration_seconds: f64,
+    language: Option<String>,
+) -> Result<RetranscriptionResult> {
+    emit_progress(app, meeting_id, "saving", 80, "Saving transcripts...");
+
+    // Create transcript segments with proper timestamps.
+    let segments = create_transcript_segments(all_transcripts);
 
     // Save to database
     let app_state = app
         .try_state::<AppState>()
         .ok_or_else(|| anyhow!("App state not available"))?;
 
-    // Wrap delete+insert+update in a transaction to prevent data loss
+    // Wrap delete+insert in a transaction to prevent data loss
     let pool = app_state.db_manager.pool();
     let mut conn = pool.acquire().await.map_err(|e| anyhow!("DB error: {}", e))?;
     let mut tx = sqlx::Connection::begin(&mut *conn)
@@ -434,7 +499,7 @@ async fn run_retranscription<R: Runtime>(
         .map_err(|e| anyhow!("Failed to start transaction: {}", e))?;
 
     sqlx::query("DELETE FROM transcripts WHERE meeting_id = ?")
-        .bind(&meeting_id)
+        .bind(meeting_id)
         .execute(&mut *tx)
         .await
         .map_err(|e| anyhow!("Failed to delete existing transcripts: {}", e))?;
@@ -445,7 +510,7 @@ async fn run_retranscription<R: Runtime>(
              VALUES (?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(&segment.id)
-        .bind(&meeting_id)
+        .bind(meeting_id)
         .bind(&segment.text)
         .bind(&segment.timestamp)
         .bind(segment.audio_start_time)
@@ -466,9 +531,9 @@ async fn run_retranscription<R: Runtime>(
     );
 
     // Write updated transcripts.json and metadata.json to the meeting folder
-    emit_progress(&app, &meeting_id, "saving", 90, "Writing transcript files...");
+    emit_progress(app, meeting_id, "saving", 90, "Writing transcript files...");
 
-    if let Err(e) = write_transcripts_json(&folder_path, &segments) {
+    if let Err(e) = write_transcripts_json(folder_path, &segments) {
         warn!("Failed to write transcripts.json: {}", e);
     }
 
@@ -480,18 +545,18 @@ async fn run_retranscription<R: Runtime>(
         .to_string();
 
     if let Err(e) = write_retranscription_metadata(
-        &folder_path,
-        &meeting_id,
+        folder_path,
+        meeting_id,
         duration_seconds,
         &audio_filename,
     ) {
         warn!("Failed to update metadata.json: {}", e);
     }
 
-    emit_progress(&app, &meeting_id, "complete", 100, "Retranscription complete");
+    emit_progress(app, meeting_id, "complete", 100, "Retranscription complete");
 
     Ok(RetranscriptionResult {
-        meeting_id,
+        meeting_id: meeting_id.to_string(),
         segments_count: segments.len(),
         duration_seconds,
         language,

@@ -7,6 +7,7 @@ import { Label } from './ui/label';
 import { Eye, EyeOff, Lock, Unlock } from 'lucide-react';
 import { ModelManager } from './WhisperModelManager';
 import { ParakeetModelManager } from './ParakeetModelManager';
+import { useConfig } from '@/contexts/ConfigContext';
 
 
 export interface TranscriptModelProps {
@@ -27,6 +28,7 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
     const [isApiKeyLocked, setIsApiKeyLocked] = useState<boolean>(true);
     const [isLockButtonVibrating, setIsLockButtonVibrating] = useState<boolean>(false);
     const [uiProvider, setUiProvider] = useState<TranscriptModelProps['provider']>(transcriptModelConfig.provider);
+    const { autoYantraTranscribe, toggleAutoYantraTranscribe } = useConfig();
 
     // Sync uiProvider when backend config changes (e.g., after model selection or initial load)
     useEffect(() => {
@@ -219,6 +221,24 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                             </div>
                         </div>
                     )}
+
+                    {/* Batch hosted transcription: re-transcribe with Yantra after a recording ends. */}
+                    <div className="mx-1 pt-3 border-t border-gray-100">
+                        <label className="flex items-start gap-3 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                checked={autoYantraTranscribe}
+                                onChange={(e) => toggleAutoYantraTranscribe(e.target.checked)}
+                            />
+                            <span className="text-sm">
+                                <span className="font-medium text-gray-800">Auto-transcribe with Yantra after recording</span>
+                                <span className="block text-xs text-gray-500 mt-0.5">
+                                    When a recording ends, re-transcribe the full audio with Yantra (hosted Whisper) and replace the live transcript. Uses your Yantra API key. Windows only.
+                                </span>
+                            </span>
+                        </label>
+                    </div>
                 </div>
             </div>
         </div >

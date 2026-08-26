@@ -256,7 +256,7 @@ export default function RootLayout({
                               <DownloadProgressToastProvider />
                               {/* Global meeting-recording indicator (calendar Join) */}
                               <RecordingIndicator />
-                              {/* Passive Google Meet detection → prompt to auto-transcribe */}
+                              {/* Passive Google Meet detection → auto-record audio + video */}
                               <MeetAutoDetect />
 
                               {/* Show onboarding or main app */}

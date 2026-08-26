@@ -2,8 +2,10 @@
 
 use crate::api::TranscriptSegment;
 use crate::audio::decoder::{decode_audio_file, decode_audio_file_with_progress};
+use crate::audio::transcription::yantra_stt;
 use crate::audio::vad::get_speech_chunks_with_progress;
 use crate::config::{DEFAULT_WHISPER_MODEL, DEFAULT_PARAKEET_MODEL};
+use crate::database::repositories::setting::SettingsRepository;
 use crate::parakeet_engine::ParakeetEngine;
 use crate::state::AppState;
 use crate::whisper_engine::WhisperEngine;
@@ -370,6 +372,38 @@ async fn run_import<R: Runtime>(
         return Err(anyhow!("Import cancelled"));
     }
 
+    // Yantra: hosted STT via the same API key as the Yantra summary provider
+    // (settings.yantraApiKey). Runs through the normal decode+VAD path below and
+    // POSTs each bounded speech segment — whole-file uploads make the hosted
+    // Whisper model loop on long audio — so no local engine is loaded.
+    let use_yantra = provider.as_deref() == Some("yantra");
+    let (yantra_key, yantra_model) = if use_yantra {
+        let app_state = app
+            .try_state::<AppState>()
+            .ok_or_else(|| anyhow!("App state not available"))?;
+        let key = match SettingsRepository::get_api_key(app_state.db_manager.pool(), "yantra").await {
+            Ok(Some(k)) if !k.trim().is_empty() => k,
+            Ok(_) => {
+                let _ = std::fs::remove_dir_all(&meeting_folder);
+                return Err(anyhow!(
+                    "Yantra API key not set. Add it in Settings under the AI/Summary provider (Yantra) — the same key is used for transcription."
+                ));
+            }
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&meeting_folder);
+                return Err(anyhow!("Failed to read Yantra API key: {}", e));
+            }
+        };
+        let m = model
+            .clone()
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or_else(|| yantra_stt::DEFAULT_YANTRA_STT_MODEL.to_string());
+        info!("Importing via Yantra (model={}, lang={:?}) — per-segment", m, language);
+        (Some(key), m)
+    } else {
+        (None, String::new())
+    };
+
     emit_progress(&app, "decoding", 15, "Decoding audio file...");
 
     // Decode the audio file with progress updates
@@ -508,7 +542,7 @@ async fn run_import<R: Runtime>(
     emit_progress(&app, "transcribing", 30, "Loading transcription engine...");
 
     // Initialize the appropriate engine
-    let whisper_engine = if !use_parakeet && total_segments > 0 {
+    let whisper_engine = if !use_parakeet && !use_yantra && total_segments > 0 {
         Some(get_or_init_whisper(&app, model.as_deref()).await?)
     } else {
         None
@@ -579,7 +613,18 @@ async fn run_import<R: Runtime>(
         }
 
         // Transcribe
-        let (text, conf) = if use_parakeet {
+        let (text, conf) = if use_yantra {
+            let key = yantra_key.as_deref().unwrap();
+            // Skip the occasional degenerate chunk the server 500s on, rather than
+            // aborting the whole import.
+            match yantra_stt::transcribe_samples(&segment.samples, key, &yantra_model, language.as_deref()).await {
+                Ok(t) => (t, 0.85f32),
+                Err(e) => {
+                    warn!("Yantra segment {} failed ({}); skipping", i, e);
+                    (String::new(), 0.0f32)
+                }
+            }
+        } else if use_parakeet {
             let engine = parakeet_engine.as_ref().unwrap();
             let text = engine
                 .transcribe_audio(segment.samples.clone())

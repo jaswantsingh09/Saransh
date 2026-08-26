@@ -1,6 +1,6 @@
 "use client"
 import { useSidebar } from "@/components/Sidebar/SidebarProvider";
-import { useState, useEffect, useCallback, Suspense } from "react";
+import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { Transcript, Summary } from "@/types";
 import PageContent from "./page-content";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -24,7 +24,7 @@ function MeetingDetailsContent() {
   const meetingId = searchParams.get('id');
   const source = searchParams.get('source'); // Check if navigated from recording
   const { setCurrentMeeting, refetchMeetings, stopSummaryPolling } = useSidebar();
-  const { isAutoSummary } = useConfig(); // Get auto-summary toggle state
+  const { isAutoSummary, autoYantraTranscribe } = useConfig(); // Auto-summary + auto-Yantra-transcribe toggles
   const router = useRouter();
   const [meetingDetails, setMeetingDetails] = useState<MeetingDetailsResponse | null>(null);
   const [meetingSummary, setMeetingSummary] = useState<Summary | null>(null);
@@ -32,6 +32,10 @@ function MeetingDetailsContent() {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [shouldAutoGenerate, setShouldAutoGenerate] = useState<boolean>(false);
   const [hasCheckedAutoGen, setHasCheckedAutoGen] = useState<boolean>(false);
+  // Auto-Yantra-transcribe (batch, on recording stop): gate auto-summary until the
+  // hosted re-transcription finishes so the summary uses the Yantra transcript.
+  const [yantraAutoDone, setYantraAutoDone] = useState<boolean>(false);
+  const yantraAutoRanRef = useRef(false);
 
   // Use pagination hook for efficient transcript loading
   const {
@@ -69,6 +73,14 @@ function MeetingDetailsContent() {
     if (source !== 'recording') {
       console.log('Not from recording navigation, skipping auto-generation');
       setHasCheckedAutoGen(true);
+      return;
+    }
+
+    // If auto-Yantra-transcribe is on, wait until the hosted re-transcription has
+    // finished (or failed) before summarizing — so the summary uses that transcript.
+    // Returns WITHOUT marking checked, so this re-runs once `yantraAutoDone` flips.
+    if (autoYantraTranscribe && !yantraAutoDone) {
+      console.log('Waiting for Yantra auto-transcription before summarizing...');
       return;
     }
 
@@ -114,7 +126,56 @@ function MeetingDetailsContent() {
     }
 
     setHasCheckedAutoGen(true);
-  }, [hasCheckedAutoGen, checkForGemmaModel, source, isAutoSummary]);
+  }, [hasCheckedAutoGen, checkForGemmaModel, source, isAutoSummary, autoYantraTranscribe, yantraAutoDone]);
+
+  // Auto-transcribe a just-finished recording with Yantra (hosted batch STT), once.
+  // Runs the same command as the manual Retranscribe dialog, then refetches the
+  // transcript. Failures are non-fatal — they unblock auto-summary on the existing
+  // (local) transcript rather than hanging.
+  useEffect(() => {
+    if (yantraAutoRanRef.current) return;
+    if (source !== 'recording' || !autoYantraTranscribe) return;
+    const folder = meetingDetails?.folder_path;
+    if (!meetingId || !folder) return;
+    yantraAutoRanRef.current = true;
+
+    let cancelled = false;
+    const unlisteners: Array<() => void> = [];
+    (async () => {
+      const { listen } = await import('@tauri-apps/api/event');
+      const done = (label: string) => {
+        if (cancelled) return;
+        console.log(`Yantra auto-transcription ${label}`);
+        setYantraAutoDone(true);
+      };
+      const unComplete = await listen<{ meeting_id: string }>('retranscription-complete', (e) => {
+        if (e.payload?.meeting_id === meetingId) { refetch(); done('complete'); }
+      });
+      const unError = await listen<{ meeting_id: string }>('retranscription-error', (e) => {
+        if (e.payload?.meeting_id === meetingId) { done('failed'); }
+      });
+      if (cancelled) { unComplete(); unError(); return; }
+      unlisteners.push(unComplete, unError);
+
+      try {
+        await invoke('start_retranscription_command', {
+          meetingId,
+          meetingFolderPath: folder,
+          language: null,
+          model: 'whisper-hinglish-preview',
+          provider: 'yantra',
+        });
+      } catch (err) {
+        console.error('Failed to start Yantra auto-transcription:', err);
+        done('start-error'); // don't block summary forever
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      unlisteners.forEach((u) => u());
+    };
+  }, [source, autoYantraTranscribe, meetingDetails?.folder_path, meetingId, refetch]);
 
   // Sync meeting metadata from pagination hook to meeting details state
   useEffect(() => {

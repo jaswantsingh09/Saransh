@@ -31,7 +31,7 @@ import { cn, isOllamaNotInstalledError } from '@/lib/utils';
 import { toast } from 'sonner';
 
 export interface ModelConfig {
-  provider: 'ollama' | 'groq' | 'claude' | 'openai' | 'openrouter' | 'builtin-ai' | 'custom-openai';
+  provider: 'ollama' | 'groq' | 'claude' | 'openai' | 'openrouter' | 'builtin-ai' | 'custom-openai' | 'yantra';
   model: string;
   whisperModel: string;
   apiKey?: string | null;
@@ -99,6 +99,17 @@ const GROQ_FALLBACK_MODELS = [
   'llama-3.1-70b-versatile',
   'mixtral-8x7b-32768',
   'gemma2-9b-it',
+];
+
+// Yantra: intelligaia's hosted, OpenAI-compatible models (fixed endpoint).
+const YANTRA_FALLBACK_MODELS = [
+  'gemma4',
+  'qwen2.5:7b-instruct',
+  'qwen3.6:latest',
+  'deepseek-v4-pro:cloud',
+  'gpt-oss:120b-cloud',
+  'glm-5.2:cloud',
+  'kimi-k3:cloud',
 ];
 
 interface ModelSettingsModalProps {
@@ -229,13 +240,15 @@ export function ModelSettingsModal({
     openrouter: openRouterModels.map((m) => m.id),
     'builtin-ai': builtinAiModels.map((m) => m.name),
     'custom-openai': customOpenAIModel ? [customOpenAIModel] : [], // User specifies model manually
+    yantra: YANTRA_FALLBACK_MODELS,
   };
 
   const requiresApiKey =
     modelConfig.provider === 'claude' ||
     modelConfig.provider === 'groq' ||
     modelConfig.provider === 'openai' ||
-    modelConfig.provider === 'openrouter';
+    modelConfig.provider === 'openrouter' ||
+    modelConfig.provider === 'yantra';
 
   // Check if Ollama endpoint has changed but models haven't been fetched yet
   const ollamaEndpointChanged = modelConfig.provider === 'ollama' &&
@@ -879,6 +892,7 @@ export function ModelSettingsModal({
                 <SelectItem value="ollama">Ollama</SelectItem>
                 <SelectItem value="openai">OpenAI</SelectItem>
                 <SelectItem value="openrouter">OpenRouter</SelectItem>
+                <SelectItem value="yantra">Yantra (intelligaia hosted)</SelectItem>
               </SelectContent>
             </Select>
 

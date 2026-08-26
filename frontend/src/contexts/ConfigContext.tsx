@@ -76,12 +76,18 @@ interface ConfigContextType {
   isAutoSummary: boolean;
   toggleIsAutoSummary: (checked: boolean) => void;
 
+  // When on, a finished recording is automatically re-transcribed with Yantra
+  // (hosted Whisper) once it ends, replacing the local live transcript.
+  autoYantraTranscribe: boolean;
+  toggleAutoYantraTranscribe: (checked: boolean) => void;
+
   // Provider-specific API keys
   providerApiKeys: {
     claude: string | null;
     groq: string | null;
     openai: string | null;
     openrouter: string | null;
+    yantra: string | null;
   };
   updateProviderApiKey: (provider: string, apiKey: string | null) => void;
 
@@ -119,11 +125,13 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     groq: string | null;
     openai: string | null;
     openrouter: string | null;
+    yantra: string | null;
   }>({
     claude: null,
     groq: null,
     openai: null,
     openrouter: null,
+    yantra: null,
   });
 
   // Ollama models list and error state
@@ -159,6 +167,14 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('isAutoSummary');
       return saved !== null ? saved === 'true' : false
+    }
+    return false;
+  });
+
+  const [autoYantraTranscribe, setAutoYantraTranscribe] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('autoYantraTranscribe');
+      return saved !== null ? saved === 'true' : false;
     }
     return false;
   });
@@ -295,7 +311,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const loadAllApiKeys = async () => {
       try {
-        const providers = ['claude', 'groq', 'openai', 'openrouter'];
+        const providers = ['claude', 'groq', 'openai', 'openrouter', 'yantra'];
         const keys = await Promise.all(
           providers.map(p =>
             invoke<string>('api_get_api_key', { provider: p })
@@ -308,6 +324,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
           groq: keys[1],
           openai: keys[2],
           openrouter: keys[3],
+          yantra: keys[4],
         });
         console.log('[ConfigContext] Loaded provider API keys');
       } catch (error) {
@@ -370,6 +387,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     openai: ['gpt-4', 'gpt-4-turbo', 'gpt-3.5-turbo'],
     'builtin-ai': [],
     'custom-openai': [],
+    yantra: ['gemma4', 'qwen2.5:7b-instruct', 'qwen3.6:latest'],
   };
 
   // Toggle confidence indicator with localStorage persistence
@@ -386,6 +404,13 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     setisAutoSummary(checked);
     if (typeof window !== 'undefined') {
       localStorage.setItem('isAutoSummary', checked.toString());
+    }
+  }, [])
+
+  const toggleAutoYantraTranscribe = useCallback((checked: boolean) => {
+    setAutoYantraTranscribe(checked);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('autoYantraTranscribe', checked.toString());
     }
   }, [])
 
@@ -487,6 +512,8 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     setModelConfig,
     isAutoSummary,
     toggleIsAutoSummary,
+    autoYantraTranscribe,
+    toggleAutoYantraTranscribe,
     providerApiKeys,
     updateProviderApiKey,
     transcriptModelConfig,
@@ -511,6 +538,8 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     modelConfig,
     isAutoSummary,
     toggleIsAutoSummary,
+    autoYantraTranscribe,
+    toggleAutoYantraTranscribe,
     providerApiKeys,
     updateProviderApiKey,
     transcriptModelConfig,

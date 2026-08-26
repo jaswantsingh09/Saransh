@@ -8,11 +8,20 @@ export interface RawModelInfo {
 }
 
 export interface ModelOption {
-  provider: 'whisper' | 'parakeet';
+  provider: 'whisper' | 'parakeet' | 'yantra';
   name: string;
   displayName: string;
   size_mb: number;
 }
+
+// Hosted (batch) transcription via Yantra — no local model to download. Always
+// offered; the Rust side surfaces a clear error if the API key isn't set.
+const YANTRA_STT_OPTION: ModelOption = {
+  provider: 'yantra',
+  name: 'whisper-hinglish-preview',
+  displayName: '☁️ Yantra (hosted): Hinglish (whisper-large-v3)',
+  size_mb: 0,
+};
 
 interface TranscriptModelConfig {
   provider?: string;
@@ -76,6 +85,9 @@ export function useTranscriptionModels(transcriptModelConfig: TranscriptModelCon
     } catch (err) {
       console.error('Failed to fetch Parakeet models:', err);
     }
+
+    // Hosted Yantra STT (batch) — always available, no local download.
+    allModels.push(YANTRA_STT_OPTION);
 
     setAvailableModels(allModels);
 

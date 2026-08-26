@@ -33,8 +33,20 @@ interface MeetingRecordingValue {
   active: boolean
   processing: boolean
   title: string | null
-  /** Open the Meet link and auto-start screen + audio recording. */
-  start: (title: string, meetLink?: string, endIso?: string) => Promise<void>
+  /**
+   * Start screen + audio recording for a meeting.
+   * - `meetLink`: if given, open it in the browser first (calendar Join flow).
+   * - `endIso`: schedule an automatic stop at this time.
+   * - `opts.windowHint`: title substring of an *already-open* meeting window to
+   *   capture — used by the browser auto-detect flow, which opens no link.
+   * - `opts.undoable`: show an "Undo" action on the start toast (auto-detect).
+   */
+  start: (
+    title: string,
+    meetLink?: string,
+    endIso?: string,
+    opts?: { windowHint?: string; undoable?: boolean },
+  ) => Promise<void>
   /** Stop both captures and merge into one MP4. */
   stop: () => Promise<void>
 }
@@ -57,7 +69,12 @@ export function MeetingRecordingProvider({ children }: { children: ReactNode }) 
   const stopRef = useRef<() => Promise<void>>(async () => {})
 
   const start = useCallback(
-    async (meetingTitle: string, meetLink?: string, endIso?: string) => {
+    async (
+      meetingTitle: string,
+      meetLink?: string,
+      endIso?: string,
+      opts?: { windowHint?: string; undoable?: boolean },
+    ) => {
       if (active || processing) {
         toast.info('A recording is already running.')
         return
@@ -70,12 +87,14 @@ export function MeetingRecordingProvider({ children }: { children: ReactNode }) 
         }
 
         // 2. try to locate the meeting window so we can crop the capture to it.
-        //    Poll briefly — the browser tab needs a moment to load + set its title.
+        //    Poll briefly — a link we just opened needs a moment to load and set
+        //    its title; an already-open meeting (auto-detect) resolves at once.
+        const windowHint = opts?.windowHint ?? 'Meet'
         let region: WindowRegion | null = null
-        if (meetLink) {
+        if (meetLink || opts?.windowHint) {
           for (let i = 0; i < 8; i++) {
             region = await invoke<WindowRegion | null>('screen_find_window_region', {
-              hint: 'Meet',
+              hint: windowHint,
             }).catch(() => null)
             if (region) break
             await sleep(700)
@@ -106,7 +125,7 @@ export function MeetingRecordingProvider({ children }: { children: ReactNode }) 
         //    otherwise the full screen.
         await invoke('screen_record_start', {
           outPath: p.screen,
-          windowHint: region ? 'Meet' : null,
+          windowHint: region ? windowHint : null,
         })
 
         setTitle(meetingTitle)
@@ -136,6 +155,14 @@ export function MeetingRecordingProvider({ children }: { children: ReactNode }) 
             (region ? 'Recording the meeting window' : 'Recording full screen') +
             ' + audio' +
             autoStopNote,
+          // Auto-detect starts silently — give a brief window to undo in case we
+          // caught the pre-join lobby or the user didn't want this one recorded.
+          ...(opts?.undoable
+            ? {
+                duration: 6000,
+                action: { label: 'Undo', onClick: () => void stopRef.current() },
+              }
+            : {}),
         })
       } catch (e) {
         // best-effort cleanup so we never leave half-started captures

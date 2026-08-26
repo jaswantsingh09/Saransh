@@ -307,6 +307,31 @@ pub fn screen_record_stop() -> Result<(), String> {
     }
 }
 
+/// Probe a media file's duration (seconds) from ffmpeg's stderr banner.
+/// Returns `None` if ffmpeg can't be run or no `Duration:` line is present.
+fn probe_duration_secs(ffmpeg: &Path, path: &str) -> Option<f64> {
+    let mut cmd = Command::new(ffmpeg);
+    cmd.args(["-i", path]);
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+    no_window(&mut cmd);
+    let out = cmd.output().ok()?;
+    let text = String::from_utf8_lossy(&out.stderr);
+    // "  Duration: 00:03:52.22, start: ..."
+    let idx = text.find("Duration:")?;
+    let dur_str = text[idx + "Duration:".len()..]
+        .split(',')
+        .next()?
+        .trim();
+    let parts: Vec<&str> = dur_str.split(':').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let h: f64 = parts[0].trim().parse().ok()?;
+    let m: f64 = parts[1].trim().parse().ok()?;
+    let s: f64 = parts[2].trim().parse().ok()?;
+    Some(h * 3600.0 + m * 60.0 + s)
+}
+
 /// Merge a (video-only) screen MP4 with an audio file into one MP4.
 #[tauri::command]
 pub fn mux_recording(
@@ -333,26 +358,41 @@ pub fn mux_recording(
         std::thread::sleep(std::time::Duration::from_millis(400));
     }
 
+    // Windows Graphics Capture tags frames at the encoder's declared rate rather
+    // than wall-clock, so a low-motion capture comes out time-compressed (plays
+    // too fast, far shorter than the meeting). The audio track is sample-accurate,
+    // so use it as the timing master: if the video's duration is materially shorter
+    // than the audio's, stretch the video's timestamps to match with `-itsscale`
+    // (container-only, no re-encode). This also removes the need for `-shortest`,
+    // which would otherwise clip the audio down to the short video.
+    let vdur = probe_duration_secs(&ffmpeg, &video_path);
+    let adur = probe_duration_secs(&ffmpeg, &audio_path);
+    let stretch = match (vdur, adur) {
+        (Some(v), Some(a)) if v > 0.5 && a > v * 1.15 => Some(a / v),
+        _ => None,
+    };
+
     let mut cmd = Command::new(&ffmpeg);
-    cmd.args([
-        "-y",
-        "-i",
-        &video_path,
-        "-i",
-        &audio_path,
-        "-map",
-        "0:v:0",
-        "-map",
-        "1:a:0",
-        "-c:v",
-        "copy",
-        "-c:a",
-        "aac",
-        "-shortest",
-        "-movflags",
-        "+faststart",
-        &out_path,
-    ]);
+    cmd.arg("-y");
+    let itsscale;
+    if let Some(s) = stretch {
+        itsscale = format!("{:.6}", s);
+        cmd.args(["-itsscale", &itsscale]);
+        log::info!(
+            "mux: video {:.1}s vs audio {:.1}s — stretching video x{:.3} to correct WGC frame-timing",
+            vdur.unwrap_or(0.0),
+            adur.unwrap_or(0.0),
+            s
+        );
+    }
+    cmd.args(["-i", &video_path, "-i", &audio_path]);
+    cmd.args(["-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac"]);
+    // Only clamp to the shortest stream when we did NOT re-time the video (i.e. the
+    // durations already agree); after stretching they match and -shortest is unwanted.
+    if stretch.is_none() {
+        cmd.arg("-shortest");
+    }
+    cmd.args(["-movflags", "+faststart", &out_path]);
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
