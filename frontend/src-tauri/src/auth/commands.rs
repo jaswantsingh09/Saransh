@@ -46,3 +46,22 @@ pub async fn auth_logout<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     clear_session(&app);
     Ok(())
 }
+
+/// Return the Saransh backend session JWT for authenticating /api/* calls,
+/// or null if there is no valid session / no backend token. This is our own
+/// short-lived session token (not a Google token) and is safe for the webview.
+#[tauri::command]
+pub async fn auth_get_api_token<R: Runtime>(app: AppHandle<R>) -> Result<Option<String>, String> {
+    let Some(session) = load_session(&app) else {
+        return Ok(None);
+    };
+    if let Ok(exp) = chrono::DateTime::parse_from_rfc3339(&session.expires_at) {
+        if exp.with_timezone(&chrono::Utc) < chrono::Utc::now() {
+            return Ok(None);
+        }
+    }
+    if session.saransh_token.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(session.saransh_token))
+}

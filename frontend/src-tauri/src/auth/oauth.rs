@@ -136,6 +136,17 @@ pub async fn run_login(cfg: &OAuthConfig) -> Result<Session> {
         return Err(anyhow!("Only @{} accounts can sign in.", cfg.allowed_domain));
     }
 
+    // Exchange the verified Google ID token for our own backend session JWT.
+    // Best-effort: if the backend is unreachable, the local (Google) session
+    // still succeeds — the app just won't have an /api/* token until next login.
+    let saransh_token = match exchange_backend_session(&token.id_token).await {
+        Ok(t) => t,
+        Err(e) => {
+            log::warn!("Saransh backend session exchange failed: {}", e);
+            String::new()
+        }
+    };
+
     let now = chrono::Utc::now();
     let expires = now + chrono::Duration::days(SESSION_TTL_DAYS);
     let token_expiry = now + chrono::Duration::seconds(token.expires_in.max(0));
@@ -148,7 +159,31 @@ pub async fn run_login(cfg: &OAuthConfig) -> Result<Session> {
         access_token: token.access_token,
         refresh_token: token.refresh_token.unwrap_or_default(),
         token_expiry: token_expiry.to_rfc3339(),
+        saransh_token,
     })
+}
+
+/// POST the Google ID token to our backend's /auth/google and return the
+/// issued session JWT (used as the Bearer token for /api/* calls).
+async fn exchange_backend_session(id_token: &str) -> Result<String> {
+    #[derive(Deserialize)]
+    struct BackendAuth {
+        access_token: String,
+    }
+    let base = super::backend_url();
+    let client = reqwest::Client::new();
+    let resp: BackendAuth = client
+        .post(format!("{}/auth/google", base))
+        .json(&serde_json::json!({ "id_token": id_token }))
+        .send()
+        .await
+        .map_err(|e| anyhow!("Backend auth request failed: {}", e))?
+        .error_for_status()
+        .map_err(|e| anyhow!("Backend rejected sign-in: {}", e))?
+        .json()
+        .await
+        .map_err(|e| anyhow!("Could not parse backend auth response: {}", e))?;
+    Ok(resp.access_token)
 }
 
 /// Return a currently-valid Google access token, refreshing it via the stored

@@ -229,9 +229,9 @@ This section is the living record of implementation progress against §8. Keep i
 | **3 · Ingest + summarize** | ✅ Done | `POST /api/meetings/ingest`, `POST/GET /api/meetings/{id}/audio`; meetings gain owner/status/audio columns; server-side summarize via configured model. E2E tested (ingest, audio up/down, cross-user 403, 404). |
 | **4 · Sharing** | ✅ Done | `share_grants` table; `POST/GET/DELETE /api/meetings/{id}/share[s]`; access = owner OR grant OR all-org (admin = owner). Role-aware `_require_meeting_access(write=)`. Full matrix tested (viewer read-only, editor read+write, all-org, revoke, owner-only management, Library visibility). |
 | **5 · Read APIs** | ✅ Done | `GET /api/meetings` (accessible + per-meeting role) and `GET /api/meetings/{id}` (metadata + role + transcript + structured summary). Access-filtered; tested incl. admin-sees-all + legacy endpoints intact. |
-| 2 · Desktop sign-in | ⬜ Only remaining task | PKCE + loopback in the Tauri app; exchange for session JWT; attach bearer to `/api/*` calls. **Client-side Rust/Next (D6).** Google client id/secret + domain configured in `backend/.env`. |
+| **2 · Desktop sign-in** | ✅ Done (integration) | Reused the app's existing Google PKCE login gate (`src-tauri/src/auth/`, `AuthGate`/`LoginScreen`). Added: exchange Google `id_token` → backend `/auth/google` → store session JWT; `auth_get_api_token` command; `authFetch` helper in `AuthContext`. `cargo check` clean; app relaunched with OAuth env, login gate active. Live Google click is the user's step. |
 
-**Backend MVP status: complete.** Tasks 1, 3, 4, 5 shipped and tested end-to-end. Only the desktop sign-in wiring (Task 2) remains, plus optional hardening (below).
+**All 5 build-order tasks shipped.** Only optional hardening remains (below).
 
 **Files touched — Task 1:** `backend/app/auth.py` (new), `backend/app/db.py` (`users` table + `upsert_user`/`get_user_by_id`), `backend/app/main.py` (auth imports + endpoints), `backend/requirements.txt`, `backend/temp.env`.
 **Files touched — Task 3:** `backend/app/db.py` (meetings ownership/status columns + `create_owned_meeting`/`add_meeting_segments`/`set_meeting_status`/`set_meeting_audio`/`get_meeting_access_info`), `backend/app/schema_validator.py` (new columns + `users` self-heal), `backend/app/main.py` (`aggregate_chunk_summaries` extracted + reused, ingest/audio endpoints, `summarize_meeting_background`, `_require_meeting_access`), `backend/temp.env` (`AUDIO_DIR`).
@@ -242,8 +242,15 @@ This section is the living record of implementation progress against §8. Keep i
 - **D13 — Action items stay embedded in the summary JSON** for the MVP (the summarizer emits them as blocks under `ImmediateActionItems`/`MeetingNotes`). First-class `action_item` rows with assignee/due-date/toggle are a follow-up task, not part of the read APIs. *(Task 5)*
 - **D14 — Detail summary is read straight from `summary_processes`** (via `get_meeting_summary`), not the `transcript_chunks` join used by the legacy `/get-summary` — because ingested meetings don't create a `transcript_chunks` row. *(Task 5)*
 
+**Files touched — Task 2:** `frontend/src-tauri/src/auth/mod.rs` (`saransh_token` field, `backend_url()`), `frontend/src-tauri/src/auth/oauth.rs` (`exchange_backend_session`, call in `run_login`), `frontend/src-tauri/src/auth/commands.rs` (`auth_get_api_token`), `frontend/src-tauri/src/lib.rs` (register command), `frontend/src/contexts/AuthContext.tsx` (`apiToken` + `authFetch`).
+
+**Decision log (Task 2):**
+- **D15 — Reused the existing desktop OAuth gate** rather than building a new flow: the app already had a full Google PKCE loopback login (`@intelligaia.com`-restricted, token storage, `AuthGate`/`LoginScreen`). Task 2 only bridged it to our backend. *(Task 2)*
+- **D16 — Client secret stays out of the desktop→backend path where possible**, but note the *existing* desktop gate already does the Google code→token exchange in Rust using `GOOGLE_OAUTH_CLIENT_SECRET` (needed for Calendar refresh tokens). Our addition sends only the resulting **id_token** to the backend, which re-verifies it. Desktop OAuth creds come from env (`GOOGLE_OAUTH_CLIENT_ID/SECRET`) or an `oauth.json` store. *(Task 2)*
+- **D17 — Our backend JWT is exposed to the webview** via `auth_get_api_token` (deliberately, unlike Google tokens which stay Rust-side) because the webview must attach it to `/api/*`; it's our own short-lived session token. *(Task 2)*
+
 ### Remaining / optional hardening (post-MVP backend)
-- **Task 2 — desktop PKCE sign-in** (client-side): the only remaining build-order item.
+- **Migrate the frontend's data calls to `/api/*`** using `authFetch` (currently the app still uses the legacy unauthenticated endpoints for meetings/summaries).
 - **First-class action items** (D13): `action_item` table + extract-on-summarize + toggle endpoint.
 - **Lock down or migrate the legacy unauthenticated endpoints** (D7) once the desktop app talks to `/api/*`.
 - **Tighten CORS** (currently `*`) to the app origin(s) for the shared deployment.

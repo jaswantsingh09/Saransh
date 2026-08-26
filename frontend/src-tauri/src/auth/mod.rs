@@ -32,6 +32,17 @@ pub struct Session {
     pub refresh_token: String,
     #[serde(default)]
     pub token_expiry: String, // RFC3339 — Google access-token expiry
+    #[serde(default)]
+    pub saransh_token: String, // our backend session JWT, used for /api/* calls
+}
+
+/// Base URL of the Saransh backend used to mint our own session JWT.
+/// Override with SARANSH_BACKEND_URL; defaults to the local dev backend.
+pub fn backend_url() -> String {
+    std::env::var("SARANSH_BACKEND_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "http://localhost:5167".to_string())
 }
 
 /// What the webview is allowed to see — no tokens.

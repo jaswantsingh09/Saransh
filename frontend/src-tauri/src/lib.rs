@@ -717,6 +717,7 @@ pub fn run() {
             auth::commands::auth_get_session,
             auth::commands::auth_start_login,
             auth::commands::auth_logout,
+            auth::commands::auth_get_api_token,
             // Google Calendar — upcoming meetings
             calendar::commands::calendar_get_upcoming_meetings,
             // Screen + video recording of meetings
