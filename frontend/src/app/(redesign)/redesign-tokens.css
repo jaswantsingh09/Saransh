@@ -1,0 +1,104 @@
+/**
+ * Redesign design tokens — CSS custom properties.
+ *
+ * Source of truth: Figma variables (file gFLPWa1todMUetoxrVmsdj, node 159:24459).
+ * These are scoped to `.redesign-scope` so they never leak into the shipping app.
+ * The (redesign) layout wraps its subtree in that class. The same values are also
+ * exposed as namespaced Tailwind theme keys (see tailwind.config.ts) — use whichever
+ * fits: Tailwind utilities for markup, CSS vars for computed styles/gradients.
+ */
+
+.redesign-scope {
+  /* Brand */
+  --rd-brand-primary: #c2410c;
+  --rd-brand-primary-dark: #bb4d00;
+  --rd-brand-accent: #d35238;
+  --rd-brand-accent-mid: #c15c3d;
+  --rd-brand-accent-dark: #a2492e;
+  --rd-brand-subtle: #fff7ed;
+
+  /* Orange ramp (matches Tailwind default orange-*) */
+  --rd-orange-50: #fff7ed;
+  --rd-orange-100: #ffedd5;
+  --rd-orange-200: #fed7aa;
+  --rd-orange-300: #fdba74;
+  --rd-orange-700: #c2410c;
+  --rd-orange-800: #9a3412;
+
+  /* Surfaces / backgrounds */
+  --rd-bg-app: #fafaf9;
+  --rd-bg-warm: #faf6f1;
+  --rd-bg-muted: #f5f5f4;
+  --rd-surface-card: #ffffff;
+  --rd-surface-accent: #ffedd5;
+  --rd-surface-accent-subtle: #fff7ed;
+  --rd-surface-accent-lightest: #fff2eb;
+  --rd-surface-overlay: #e1dddd;
+  --rd-surface-inverted: #000000;
+
+  /* Text */
+  --rd-text-primary: #020617;
+  --rd-text-heading: #0f172a;
+  --rd-text-secondary: #262626;
+  --rd-text-body: #334155;
+  --rd-text-muted: #737373;
+  --rd-text-subtle: #52525b;
+  --rd-text-tertiary: #64748b;
+  --rd-text-brand: #c2410c;
+  --rd-text-link: #2563eb;
+  --rd-text-on-primary: #ffffff;
+  --rd-text-error: #dc2626;
+  --rd-text-success: #15803d;
+
+  /* Borders */
+  --rd-border-default: #e2e8f0;
+  --rd-border-warm: #ead4c9;
+  --rd-border-warm-light: #eadcc9;
+  --rd-border-muted: #d4d4d8;
+  --rd-border-strong: #cbd5e1;
+  --rd-border-brand: #bb4d00;
+  --rd-border-accent: #ffedd5;
+  --rd-border-subtle: #94a3b8;
+  --rd-border-focus: #3b82f6;
+
+  /* Status */
+  --rd-status-error: #dc2626;
+  --rd-status-warning: #fbbf24;
+  --rd-status-success: #16a34a;
+
+  /* Window traffic lights */
+  --rd-window-close: #ff6154;
+  --rd-window-minimize: #ffbd36;
+  --rd-window-maximize: #29c742;
+
+  /* Radii */
+  --rd-radius-sm: 4px;
+  --rd-radius-md: 6px;
+  --rd-radius-lg: 8px;
+  --rd-radius-xl: 12px;
+  --rd-radius-2xl: 16px;
+  --rd-radius-full: 9999px;
+
+  /* Spacing scale */
+  --rd-space-2: 2px;
+  --rd-space-4: 4px;
+  --rd-space-6: 6px;
+  --rd-space-8: 8px;
+  --rd-space-12: 12px;
+  --rd-space-16: 16px;
+  --rd-space-20: 20px;
+  --rd-space-24: 24px;
+  --rd-space-32: 32px;
+  --rd-space-64: 64px;
+
+  /* Shadows */
+  --rd-shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --rd-shadow-sm: 0 1px 2px -1px rgba(0, 0, 0, 0.1), 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+  --rd-shadow-md: 0 2px 4px -2px rgba(0, 0, 0, 0.1), 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  --rd-shadow-lg: 0 4px 6px -4px rgba(0, 0, 0, 0.1), 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+
+  /* Base surface + type for the redesign subtree */
+  background-color: var(--rd-bg-app);
+  color: var(--rd-text-body);
+  font-family: var(--font-inter), "Inter", system-ui, sans-serif;
+}

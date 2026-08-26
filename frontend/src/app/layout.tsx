@@ -9,6 +9,7 @@ import AnalyticsProvider from '@/components/AnalyticsProvider'
 import { Toaster, toast } from 'sonner'
 import "sonner/dist/styles.css"
 import { useState, useEffect, useCallback } from 'react'
+import { usePathname } from 'next/navigation'
 import { listen, UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -73,6 +74,14 @@ export default function RootLayout({
 }: {
   children: React.ReactNode
 }) {
+  const pathname = usePathname()
+  // Dev-only preview surface for the (redesign) route group: render redesign
+  // routes standalone, skipping the AuthGate / onboarding / legacy Sidebar chrome
+  // so the new UI can be screenshotted and reviewed in isolation. Production still
+  // gates every route through AuthGate below.
+  const isRedesignPreview =
+    process.env.NODE_ENV !== 'production' && pathname?.startsWith('/preview')
+
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [onboardingCompleted, setOnboardingCompleted] = useState(false)
 
@@ -82,6 +91,7 @@ export default function RootLayout({
   const [importFilePath, setImportFilePath] = useState<string | null>(null)
 
   useEffect(() => {
+    if (isRedesignPreview) return // preview runs outside Tauri; skip native calls
     // Check onboarding status first
     invoke<{ completed: boolean } | null>('get_onboarding_status')
       .then((status) => {
@@ -112,6 +122,7 @@ export default function RootLayout({
     }
   }, []);
   useEffect(() => {
+    if (isRedesignPreview) return // preview runs outside Tauri; skip native listeners
     // Listen for tray recording toggle request
     const unlisten = listen('request-recording-toggle', () => {
       console.log('[Layout] Received request-recording-toggle from tray');
@@ -163,6 +174,7 @@ export default function RootLayout({
 
   // Listen for drag-drop events
   useEffect(() => {
+    if (isRedesignPreview) return; // preview runs outside Tauri; skip drag-drop listeners
     if (showOnboarding) return; // Don't handle drops during onboarding
 
     const unlisteners: UnlistenFn[] = [];
@@ -233,6 +245,17 @@ export default function RootLayout({
     setOnboardingCompleted(true)
     // Optionally reload the window to ensure all state is fresh
     window.location.reload()
+  }
+
+  if (isRedesignPreview) {
+    return (
+      <html lang="en">
+        <body className={`${sourceSans3.variable} font-sans antialiased`}>
+          {children}
+          <Toaster position="bottom-center" richColors closeButton />
+        </body>
+      </html>
+    )
   }
 
   return (
