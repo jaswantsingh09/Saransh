@@ -7,6 +7,8 @@ import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { useRecordingState, RecordingStatus } from '@/contexts/RecordingStateContext';
 import { storageService } from '@/services/storageService';
 import { transcriptService } from '@/services/transcriptService';
+import { ingestMeetingToBackend } from '@/services/backendSyncService';
+import { useAuth } from '@/contexts/AuthContext';
 import Analytics from '@/lib/analytics';
 
 type SummaryStatus = 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
@@ -62,6 +64,9 @@ export function useRecordingStop(
     meetings,
     setIsMeetingActive,
   } = useSidebar();
+
+  // Backend session for dual-write ingest to the shared org backend.
+  const { authFetch, session } = useAuth();
 
   const router = useRouter();
 
@@ -268,6 +273,24 @@ export function useRecordingStop(
           // Mark meeting as saved in IndexedDB (for recovery system)
           await markMeetingAsSaved();
 
+          // Dual-write: best-effort push to the shared org backend so the meeting
+          // becomes visible/shareable across the org. The local save above is the
+          // source of record — a failed push must never disrupt the local flow.
+          // Skipped when not signed in (local-only usage stays fully functional).
+          if (session) {
+            const backendTitle = savedMeetingName || meetingTitle || 'New Meeting';
+            ingestMeetingToBackend(authFetch, backendTitle, freshTranscripts)
+              .then((res) => {
+                console.log('✅ Ingested meeting to backend:', res.meeting_id, res.status);
+              })
+              .catch((err) => {
+                console.error('Backend ingest failed (meeting saved locally):', err);
+                toast.error('Could not sync meeting to the org backend', {
+                  description: 'Saved locally. It won\'t be shareable until it syncs.',
+                });
+              });
+          }
+
           // Clean up session storage
           sessionStorage.removeItem('last_recording_folder_path');
           sessionStorage.removeItem('last_recording_meeting_name');
@@ -407,6 +430,8 @@ export function useRecordingStop(
     meetings,
     setIsMeetingActive,
     router,
+    session,
+    authFetch,
   ]);
 
   // Expose handleRecordingStop function to window for Rust callbacks

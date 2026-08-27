@@ -230,8 +230,9 @@ This section is the living record of implementation progress against §8. Keep i
 | **4 · Sharing** | ✅ Done | `share_grants` table; `POST/GET/DELETE /api/meetings/{id}/share[s]`; access = owner OR grant OR all-org (admin = owner). Role-aware `_require_meeting_access(write=)`. Full matrix tested (viewer read-only, editor read+write, all-org, revoke, owner-only management, Library visibility). |
 | **5 · Read APIs** | ✅ Done | `GET /api/meetings` (accessible + per-meeting role) and `GET /api/meetings/{id}` (metadata + role + transcript + structured summary). Access-filtered; tested incl. admin-sees-all + legacy endpoints intact. |
 | **2 · Desktop sign-in** | ✅ Done (integration) | Reused the app's existing Google PKCE login gate (`src-tauri/src/auth/`, `AuthGate`/`LoginScreen`). Added: exchange Google `id_token` → backend `/auth/google` → store session JWT; `auth_get_api_token` command; `authFetch` helper in `AuthContext`. `cargo check` clean; app relaunched with OAuth env, login gate active. Live Google click is the user's step. |
+| **FE-1 · Dual-write ingest** | ✅ Done | Desktop → shared backend: after the local SQLite save on recording stop, best-effort `POST /api/meetings/ingest` via `authFetch` so the meeting becomes org-visible/shareable. Non-blocking, signed-in-only. `tsc --noEmit` clean. |
 
-**All 5 build-order tasks shipped.** Only optional hardening remains (below).
+**All 5 build-order tasks shipped.** Frontend↔backend integration (FE) is now in progress — dual-write ingest landed; org-backed reads + sharing UI remain (below).
 
 **Files touched — Task 1:** `backend/app/auth.py` (new), `backend/app/db.py` (`users` table + `upsert_user`/`get_user_by_id`), `backend/app/main.py` (auth imports + endpoints), `backend/requirements.txt`, `backend/temp.env`.
 **Files touched — Task 3:** `backend/app/db.py` (meetings ownership/status columns + `create_owned_meeting`/`add_meeting_segments`/`set_meeting_status`/`set_meeting_audio`/`get_meeting_access_info`), `backend/app/schema_validator.py` (new columns + `users` self-heal), `backend/app/main.py` (`aggregate_chunk_summaries` extracted + reused, ingest/audio endpoints, `summarize_meeting_background`, `_require_meeting_access`), `backend/temp.env` (`AUDIO_DIR`).
@@ -249,8 +250,14 @@ This section is the living record of implementation progress against §8. Keep i
 - **D16 — Client secret stays out of the desktop→backend path where possible**, but note the *existing* desktop gate already does the Google code→token exchange in Rust using `GOOGLE_OAUTH_CLIENT_SECRET` (needed for Calendar refresh tokens). Our addition sends only the resulting **id_token** to the backend, which re-verifies it. Desktop OAuth creds come from env (`GOOGLE_OAUTH_CLIENT_ID/SECRET`) or an `oauth.json` store. *(Task 2)*
 - **D17 — Our backend JWT is exposed to the webview** via `auth_get_api_token` (deliberately, unlike Google tokens which stay Rust-side) because the webview must attach it to `/api/*`; it's our own short-lived session token. *(Task 2)*
 
+**Files touched — FE-1 (dual-write ingest):** `frontend/src/services/backendSyncService.ts` (new — `ingestMeetingToBackend`, transcript→`IngestSegment` mapping), `frontend/src/hooks/useRecordingStop.ts` (call it post-save via `useAuth().authFetch`, gated on `session`).
+
+**Decision log (FE-1):**
+- **D18 — Dual-write, backend-read (best-effort ingest).** The desktop stays local-first: it keeps recording to local SQLite (offline capture buffer) and, on stop, fire-and-forgets an ingest to the shared backend which becomes the source of truth for org reads/sharing. The push is non-blocking and never fails the local save; if it errors the meeting still exists locally (a retry/backfill path is a follow-up). Skipped entirely when the user isn't signed in, so local-only usage is unchanged. *(FE-1)*
+
 ### Remaining / optional hardening (post-MVP backend)
-- **Migrate the frontend's data calls to `/api/*`** using `authFetch` (currently the app still uses the legacy unauthenticated endpoints for meetings/summaries).
+- **Org-backed reads** — point the sidebar list + meeting detail at `GET /api/meetings` and `GET /api/meetings/{id}` (via `authFetch`) so shared meetings appear, instead of the local-only `api_get_meetings`. *(next FE slice after FE-1)*
+- **Sharing UI** — surface `POST/GET/DELETE /api/meetings/{id}/shares` (invite viewer/editor, revoke) in the meeting detail view.
 - **First-class action items** (D13): `action_item` table + extract-on-summarize + toggle endpoint.
 - **Lock down or migrate the legacy unauthenticated endpoints** (D7) once the desktop app talks to `/api/*`.
 - **Tighten CORS** (currently `*`) to the app origin(s) for the shared deployment.
