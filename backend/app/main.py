@@ -955,12 +955,25 @@ def _parse_summary_result(raw: Optional[str]) -> Optional[dict]:
 
 
 @app.get("/api/meetings")
-async def list_my_meetings(user: CurrentUser = Depends(get_current_user)):
+async def list_my_meetings(
+    project_id: Optional[str] = None,
+    unassigned: bool = False,
+    user: CurrentUser = Depends(get_current_user),
+):
     """List meetings the current user can access (owned, shared, or all-org),
-    each annotated with the user's role. Feeds the Library screen."""
+    each annotated with the user's role. Feeds the Library screen.
+
+    Optional filters:
+      - unassigned=true  -> only meetings not yet filed under a project (triage list)
+      - project_id=<id>  -> only meetings filed under that project
+    """
     meetings = await db.list_accessible_meetings(user.id, user.is_admin)
     result = []
     for m in meetings:
+        if unassigned and m.get("project_id"):
+            continue
+        if project_id and m.get("project_id") != project_id:
+            continue
         is_owner = user.is_admin or m["owner_id"] == user.id
         role = "owner" if is_owner else (await db.get_share_role(m["id"], user.id) or "viewer")
         result.append({
@@ -972,6 +985,7 @@ async def list_my_meetings(user: CurrentUser = Depends(get_current_user)):
             "is_owner": is_owner,
             "role": role,
             "audio_uploaded": m["audio_uploaded"],
+            "project_id": m.get("project_id"),
         })
     return {"meetings": result}
 
@@ -1001,10 +1015,73 @@ async def get_meeting_detail(meeting_id: str, user: CurrentUser = Depends(get_cu
         "owner_id": access["owner_id"],
         "role": access["role"],
         "audio_uploaded": access["audio_uploaded"],
+        "project_id": access.get("project_id"),
         "transcripts": meeting["transcripts"],
         "summary_status": summary_status,
         "summary": summary_data,
     }
+
+
+# ----------------------------------------------------------------------
+# Projects (filing a meeting series) + Unassigned triage
+# ----------------------------------------------------------------------
+class CreateProjectRequest(BaseModel):
+    name: str
+
+
+class AssignProjectRequest(BaseModel):
+    # The project to file the meeting under. Send null to move it back to
+    # Unassigned (the triage list).
+    project_id: Optional[str] = None
+
+
+async def _require_project_access(project_id: str, user: CurrentUser) -> dict:
+    """Resolve a user's access to a project: owner or admin. Raises 404/403."""
+    project = await db.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if not (user.is_admin or project["owner_id"] == user.id):
+        raise HTTPException(status_code=403, detail="You do not have access to this project")
+    return project
+
+
+@app.get("/api/projects")
+async def list_projects(user: CurrentUser = Depends(get_current_user)):
+    """List the current user's projects (admins see all), each with a count of
+    how many meetings they can access are filed under it. Feeds the Library."""
+    projects = await db.list_projects(user.id, user.is_admin)
+    return {"projects": projects}
+
+
+@app.post("/api/projects")
+async def create_project(req: CreateProjectRequest, user: CurrentUser = Depends(get_current_user)):
+    """Create a project owned by the current user."""
+    name = (req.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Project name cannot be empty")
+    if len(name) > 200:
+        raise HTTPException(status_code=400, detail="Project name too long (max 200 chars)")
+    project = await db.create_project(name=name, owner_id=user.id)
+    return {"status": "ok", "project": project}
+
+
+@app.post("/api/meetings/{meeting_id}/project")
+async def assign_meeting_project(
+    meeting_id: str,
+    req: AssignProjectRequest,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """File a meeting under a project, or move it back to Unassigned.
+
+    Requires write access to the meeting (owner/editor/admin). When a project
+    is given, the caller must also have access to that project."""
+    await _require_meeting_access(meeting_id, user, write=True)
+
+    if req.project_id:
+        await _require_project_access(req.project_id, user)
+
+    await db.set_meeting_project(meeting_id, req.project_id)
+    return {"status": "ok", "meeting_id": meeting_id, "project_id": req.project_id}
 
 
 @app.on_event("shutdown")

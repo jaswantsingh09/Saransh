@@ -41,7 +41,15 @@ class SchemaValidator:
                 ('source', 'TEXT', ''),
                 ('started_at', 'TEXT', ''),
                 ('duration_s', 'INTEGER', ''),
-                ('audio_uploaded', 'INTEGER', 'DEFAULT 0')
+                ('audio_uploaded', 'INTEGER', 'DEFAULT 0'),
+                ('project_id', 'TEXT', '')
+            ],
+            'projects': [
+                ('id', 'TEXT', 'PRIMARY KEY'),
+                ('name', 'TEXT', 'NOT NULL'),
+                ('owner_id', 'TEXT', ''),
+                ('created_at', 'TEXT', 'NOT NULL'),
+                ('updated_at', 'TEXT', 'NOT NULL')
             ],
             'users': [
                 ('id', 'TEXT', 'PRIMARY KEY'),

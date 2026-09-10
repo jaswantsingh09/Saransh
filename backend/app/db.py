@@ -74,6 +74,8 @@ class DatabaseManager:
                 ("started_at", "TEXT"),
                 ("duration_s", "INTEGER"),
                 ("audio_uploaded", "INTEGER DEFAULT 0"),
+                # A meeting belongs to at most one project; NULL == unassigned (triage).
+                ("project_id", "TEXT"),
             ]:
                 try:
                     cursor.execute(f"ALTER TABLE meetings ADD COLUMN {col_name} {col_def}")
@@ -183,6 +185,17 @@ class DatabaseManager:
                     is_admin INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     last_login_at TEXT
+                )
+            """)
+
+            # Create projects table (a meeting series lives under one project)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS projects (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    owner_id TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 )
             """)
 
@@ -1106,7 +1119,7 @@ class DatabaseManager:
         """Return ownership/status info for authorization, or None if not found."""
         async with self._get_connection() as conn:
             cursor = await conn.execute(
-                "SELECT id, owner_id, status, audio_uploaded FROM meetings WHERE id = ?",
+                "SELECT id, owner_id, status, audio_uploaded, project_id FROM meetings WHERE id = ?",
                 (meeting_id,),
             )
             row = await cursor.fetchone()
@@ -1117,6 +1130,7 @@ class DatabaseManager:
                 "owner_id": row[1],
                 "status": row[2],
                 "audio_uploaded": bool(row[3]),
+                "project_id": row[4],
             }
 
     # ------------------------------------------------------------------
@@ -1278,14 +1292,15 @@ class DatabaseManager:
             if is_admin:
                 cursor = await conn.execute(
                     """
-                    SELECT id, title, created_at, owner_id, status, audio_uploaded
+                    SELECT id, title, created_at, owner_id, status, audio_uploaded, project_id
                     FROM meetings ORDER BY created_at DESC
                     """
                 )
             else:
                 cursor = await conn.execute(
                     """
-                    SELECT DISTINCT m.id, m.title, m.created_at, m.owner_id, m.status, m.audio_uploaded
+                    SELECT DISTINCT m.id, m.title, m.created_at, m.owner_id, m.status,
+                                    m.audio_uploaded, m.project_id
                     FROM meetings m
                     LEFT JOIN share_grants sg ON sg.meeting_id = m.id
                     WHERE m.owner_id = ?
@@ -1304,6 +1319,98 @@ class DatabaseManager:
                     "owner_id": r[3],
                     "status": r[4],
                     "audio_uploaded": bool(r[5]),
+                    "project_id": r[6],
                 }
                 for r in rows
             ]
+
+    # ------------------------------------------------------------------
+    # Projects (filing a meeting series) + Unassigned triage
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _row_to_project(row) -> Optional[Dict]:
+        """Map a projects row (id, name, owner_id, created_at, updated_at) to a dict."""
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "name": row[1],
+            "owner_id": row[2],
+            "created_at": row[3],
+            "updated_at": row[4],
+        }
+
+    async def create_project(self, name: str, owner_id: str) -> Dict:
+        """Create a project owned by a user."""
+        if not name or not name.strip():
+            raise ValueError("name cannot be empty")
+        if not owner_id:
+            raise ValueError("owner_id is required")
+
+        project_id = f"project-{uuid.uuid4().hex}"
+        now = datetime.utcnow().isoformat()
+        async with self._get_connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO projects (id, name, owner_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (project_id, name.strip(), owner_id, now, now),
+            )
+            await conn.commit()
+        logger.info(f"Created project {project_id} ('{name.strip()}') for owner {owner_id}")
+        return await self.get_project(project_id)
+
+    async def get_project(self, project_id: str) -> Optional[Dict]:
+        """Fetch a single project by id."""
+        async with self._get_connection() as conn:
+            cursor = await conn.execute(
+                "SELECT id, name, owner_id, created_at, updated_at FROM projects WHERE id = ?",
+                (project_id,),
+            )
+            return self._row_to_project(await cursor.fetchone())
+
+    async def list_projects(self, user_id: str, is_admin: bool = False) -> list:
+        """List projects a user can see (their own; admins see all), each with a
+        count of how many meetings the SAME user can access are filed under it."""
+        accessible = await self.list_accessible_meetings(user_id, is_admin)
+        counts: Dict[str, int] = {}
+        for m in accessible:
+            pid = m.get("project_id")
+            if pid:
+                counts[pid] = counts.get(pid, 0) + 1
+
+        async with self._get_connection() as conn:
+            if is_admin:
+                cursor = await conn.execute(
+                    "SELECT id, name, owner_id, created_at, updated_at "
+                    "FROM projects ORDER BY created_at DESC"
+                )
+            else:
+                cursor = await conn.execute(
+                    "SELECT id, name, owner_id, created_at, updated_at "
+                    "FROM projects WHERE owner_id = ? ORDER BY created_at DESC",
+                    (user_id,),
+                )
+            rows = await cursor.fetchall()
+
+        projects = []
+        for r in rows:
+            p = self._row_to_project(r)
+            p["meeting_count"] = counts.get(p["id"], 0)
+            projects.append(p)
+        return projects
+
+    async def set_meeting_project(self, meeting_id: str, project_id: Optional[str]) -> None:
+        """File a meeting under a project, or clear it (project_id=None -> unassigned)."""
+        now = datetime.utcnow().isoformat()
+        async with self._get_connection() as conn:
+            await conn.execute(
+                "UPDATE meetings SET project_id = ?, updated_at = ? WHERE id = ?",
+                (project_id, now, meeting_id),
+            )
+            await conn.commit()
+        logger.info(
+            f"Filed meeting {meeting_id} under project {project_id}"
+            if project_id else f"Moved meeting {meeting_id} back to Unassigned"
+        )
